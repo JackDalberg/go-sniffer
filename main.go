@@ -16,7 +16,7 @@ const ROTMGPort uint16 = 2050
 var (
 	snapshot_len int32         = 1024
 	promiscuous  bool          = false
-	timeout      time.Duration = 60 * time.Second //pcap.BlockForever
+	timeout      time.Duration = 60 * time.Millisecond //pcap.BlockForever
 
 	handle *pcap.Handle
 
@@ -31,7 +31,7 @@ Finds device communicating on ROTMGPort (2050) with TCP and  returns a pcap.Hand
 func FindROTMGDevice() *pcap.Handle {
 	devices, err := pcap.FindAllDevs()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("No device", err)
 	}
 
 	handleChan := make(chan *pcap.Handle)
@@ -39,21 +39,27 @@ func FindROTMGDevice() *pcap.Handle {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	for _, device := range devices {
+		if len(device.Addresses) == 0 {
+			continue
+		}
+		fmt.Printf("Trying device: %v\n", device)
 		go func(device pcap.Interface) {
-			fmt.Printf("Trying device: %v\n", device.Name)
+			// fmt.Printf("Trying device: %v\n", device.Name)
 
 			handle, err := pcap.OpenLive(device.Name, snapshot_len, promiscuous, timeout)
 			if err != nil {
 				log.Fatal(err)
 			}
 			packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-			for packet := range packetSource.Packets() {
+			packetChan := packetSource.Packets()
+			for {
 				select {
 				case <-ctx.Done():
 					handle.Close()
-					fmt.Printf("Closed device: %v", device)
+					fmt.Printf("Closed device: %v\n\n", device)
 					return
-				default:
+
+				case packet := <-packetChan:
 					tcpLayer := packet.Layer(layers.LayerTypeTCP)
 					if tcpLayer != nil {
 						tcp, _ := tcpLayer.(*layers.TCP)
@@ -62,6 +68,9 @@ func FindROTMGDevice() *pcap.Handle {
 							return
 						}
 					}
+
+				default:
+					time.Sleep(10 * time.Millisecond)
 				}
 			}
 
@@ -96,7 +105,7 @@ func main() {
 		for _, layerType := range foundLayerTypes {
 			if layerType == layers.LayerTypeTCP && (uint16(tcpLayer.SrcPort) == ROTMGPort || uint16(tcpLayer.DstPort) == ROTMGPort) {
 				fmt.Println("TCP Port: ", tcpLayer.SrcPort, "->", tcpLayer.DstPort)
-				fmt.Println(packet)
+				// fmt.Println(packet)
 				// fmt.Println(packet.TransportLayer().LayerContents())
 			}
 		}
